@@ -1,0 +1,44 @@
+name: Build macOS Catalina installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build-catalina-pkg.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for Intel and Catalina
+        run: |
+          command -v ninja || brew install ninja
+          git clone --depth 1 --branch 8.0.10 https://github.com/juce-framework/JUCE.git "$RUNNER_TEMP/JUCE"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/JUCE"
+          cmake --build build --target PluginAnalyser --parallel 2
+      - name: Verify and package app
+        run: |
+          app='build/Plugin Analyser.app'
+          binary="$app/Contents/MacOS/Plugin Analyser"
+          test "$(lipo -archs "$binary")" = x86_64
+          vtool -show-build "$binary" | tee build/macos-version.txt
+          grep -Eq '^[[:space:]]+minos 10\.15(\.0)?$' build/macos-version.txt
+          plutil -replace LSMinimumSystemVersion -string 10.15 "$app/Contents/Info.plist" ||
+            plutil -insert LSMinimumSystemVersion -string 10.15 "$app/Contents/Info.plist"
+          codesign --force --sign - "$app"
+          codesign --verify --strict "$app"
+          pkgbuild --component "$app" --install-location /Applications \
+            --version 1.0.0 PluginAnalyser-Catalina-Intel.pkg
+          pkgutil --payload-files PluginAnalyser-Catalina-Intel.pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PluginAnalyser-Catalina-Intel
+          path: PluginAnalyser-Catalina-Intel.pkg
+          if-no-files-found: error
